@@ -15,8 +15,6 @@ A modern SwiftUI app that presents live, on-device sensor data from iPhone, iPad
 
 Apple does **not** expose everything through public APIs. This project explicitly surfaces those limits in the UI, including:
 
-- CoreMotion may emit an Apple-internal managed-preferences warning on some devices/simulators (e.g., permission-protected `com.apple.CoreMotion.plist`); this is system-side logging and not a crash in this app.
-
 - Per-satellite GNSS identifiers (GPS/Galileo PRN IDs).
 - Raw cellular signal strength (RSSI/RSRP/RSRQ in dBm).
 

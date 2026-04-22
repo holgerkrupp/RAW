@@ -19,7 +19,7 @@ final class SensorStore: NSObject, ObservableObject {
         var id: String { rawValue }
     }
 
-    @Published var selectedSection: SensorSection?
+    @Published var selectedSection: SensorSection? = .location
 
     @Published var locationSummary: [SensorValue] = []
     @Published var motionSummary: [SensorValue] = []
@@ -37,23 +37,53 @@ final class SensorStore: NSObject, ObservableObject {
     private let pathQueue = DispatchQueue(label: "radio.path.monitor")
 
     private var cpuTimer: Timer?
-    private var didStart = false
 
     func start() {
-        guard !didStart else { return }
-        didStart = true
-
         UIDevice.current.isBatteryMonitoringEnabled = true
 
         locationManager.delegate = self
         locationManager.desiredAccuracy = kCLLocationAccuracyBestForNavigation
         locationManager.activityType = .fitness
-        locationSummary = [SensorValue(name: "Permission", value: "Waiting for location authorization")]
         locationManager.requestWhenInUseAuthorization()
+        locationManager.startUpdatingLocation()
+        if #available(iOS 14.0, *) {
+            locationManager.startUpdatingHeading()
+        }
 
-        startMotionSensors()
-        startBarometer()
-        startMagnetometer()
+        if motionManager.isDeviceMotionAvailable {
+            motionManager.deviceMotionUpdateInterval = 0.2
+            motionManager.startDeviceMotionUpdates(to: .main) { [weak self] motion, _ in
+                guard let self, let motion else { return }
+                self.motionSummary = [
+                    SensorValue(name: "Acceleration X/Y/Z (g)", value: String(format: "%.3f / %.3f / %.3f", motion.userAcceleration.x, motion.userAcceleration.y, motion.userAcceleration.z)),
+                    SensorValue(name: "Gyro X/Y/Z (rad/s)", value: String(format: "%.3f / %.3f / %.3f", motion.rotationRate.x, motion.rotationRate.y, motion.rotationRate.z)),
+                    SensorValue(name: "Gravity X/Y/Z", value: String(format: "%.3f / %.3f / %.3f", motion.gravity.x, motion.gravity.y, motion.gravity.z)),
+                    SensorValue(name: "Attitude roll/pitch/yaw", value: String(format: "%.3f / %.3f / %.3f", motion.attitude.roll, motion.attitude.pitch, motion.attitude.yaw))
+                ]
+            }
+        }
+
+        if motionManager.isMagnetometerAvailable {
+            motionManager.magnetometerUpdateInterval = 0.3
+            motionManager.startMagnetometerUpdates(to: .main) { [weak self] data, _ in
+                guard let self, let data else { return }
+                self.magnetometerSummary = [
+                    SensorValue(name: "Magnetic Field X/Y/Z (µT)", value: String(format: "%.2f / %.2f / %.2f", data.magneticField.x, data.magneticField.y, data.magneticField.z))
+                ]
+            }
+        }
+
+        if CMAltimeter.isRelativeAltitudeAvailable() {
+            altimeter.startRelativeAltitudeUpdates(to: .main) { [weak self] data, _ in
+                guard let self, let data else { return }
+                self.barometerSummary = [
+                    SensorValue(name: "Pressure (kPa)", value: String(format: "%.2f", data.pressure.doubleValue)),
+                    SensorValue(name: "Relative Altitude (m)", value: String(format: "%.2f", data.relativeAltitude.doubleValue))
+                ]
+            }
+        } else {
+            barometerSummary = [SensorValue(name: "Barometer", value: "Not available on this device")]
+        }
 
         pathMonitor.pathUpdateHandler = { [weak self] path in
             Task { @MainActor in
@@ -83,19 +113,8 @@ final class SensorStore: NSObject, ObservableObject {
             }
         }
         updateDeviceSummary()
-        radioSummary = buildRadioSummary(path: pathMonitor.currentPath)
-    }
 
-    deinit {
-        motionManager.stopDeviceMotionUpdates()
-        motionManager.stopMagnetometerUpdates()
-        altimeter.stopRelativeAltitudeUpdates()
-        locationManager.stopUpdatingLocation()
-        if #available(iOS 14.0, *) {
-            locationManager.stopUpdatingHeading()
-        }
-        pathMonitor.cancel()
-        cpuTimer?.invalidate()
+        radioSummary = buildRadioSummary(path: pathMonitor.currentPath)
     }
 
     func values(for section: SensorSection) -> [SensorValue] {
@@ -106,73 +125,6 @@ final class SensorStore: NSObject, ObservableObject {
         case .magnetometer: return magnetometerSummary
         case .radio: return radioSummary
         case .device: return deviceSummary
-        }
-    }
-
-    private func startMotionSensors() {
-        guard motionManager.isDeviceMotionAvailable else {
-            motionSummary = [SensorValue(name: "Motion", value: "Device motion is unavailable on this hardware")]
-            return
-        }
-
-        if #available(iOS 11.0, *), CMMotionActivityManager.authorizationStatus() == .denied {
-            motionSummary = [SensorValue(name: "Permission", value: "Motion access denied in Settings")]
-            return
-        }
-
-        motionManager.deviceMotionUpdateInterval = 0.2
-        motionManager.startDeviceMotionUpdates(to: .main) { [weak self] motion, error in
-            guard let self else { return }
-            if let error {
-                self.motionSummary = [SensorValue(name: "Motion Error", value: error.localizedDescription)]
-                return
-            }
-            guard let motion else { return }
-            self.motionSummary = [
-                SensorValue(name: "Acceleration X/Y/Z (g)", value: String(format: "%.3f / %.3f / %.3f", motion.userAcceleration.x, motion.userAcceleration.y, motion.userAcceleration.z)),
-                SensorValue(name: "Gyro X/Y/Z (rad/s)", value: String(format: "%.3f / %.3f / %.3f", motion.rotationRate.x, motion.rotationRate.y, motion.rotationRate.z)),
-                SensorValue(name: "Gravity X/Y/Z", value: String(format: "%.3f / %.3f / %.3f", motion.gravity.x, motion.gravity.y, motion.gravity.z)),
-                SensorValue(name: "Attitude roll/pitch/yaw", value: String(format: "%.3f / %.3f / %.3f", motion.attitude.roll, motion.attitude.pitch, motion.attitude.yaw))
-            ]
-        }
-    }
-
-    private func startMagnetometer() {
-        guard motionManager.isMagnetometerAvailable else {
-            magnetometerSummary = [SensorValue(name: "Magnetometer", value: "Unavailable on this hardware")]
-            return
-        }
-
-        motionManager.magnetometerUpdateInterval = 0.3
-        motionManager.startMagnetometerUpdates(to: .main) { [weak self] data, error in
-            guard let self else { return }
-            if let error {
-                self.magnetometerSummary = [SensorValue(name: "Magnetometer Error", value: error.localizedDescription)]
-                return
-            }
-            guard let data else { return }
-            self.magnetometerSummary = [
-                SensorValue(name: "Magnetic Field X/Y/Z (µT)", value: String(format: "%.2f / %.2f / %.2f", data.magneticField.x, data.magneticField.y, data.magneticField.z))
-            ]
-        }
-    }
-
-    private func startBarometer() {
-        if CMAltimeter.isRelativeAltitudeAvailable() {
-            altimeter.startRelativeAltitudeUpdates(to: .main) { [weak self] data, error in
-                guard let self else { return }
-                if let error {
-                    self.barometerSummary = [SensorValue(name: "Barometer Error", value: error.localizedDescription)]
-                    return
-                }
-                guard let data else { return }
-                self.barometerSummary = [
-                    SensorValue(name: "Pressure (kPa)", value: String(format: "%.2f", data.pressure.doubleValue)),
-                    SensorValue(name: "Relative Altitude (m)", value: String(format: "%.2f", data.relativeAltitude.doubleValue))
-                ]
-            }
-        } else {
-            barometerSummary = [SensorValue(name: "Barometer", value: "Not available on this device")]
         }
     }
 
@@ -306,9 +258,6 @@ extension SensorStore: CLLocationManagerDelegate {
             switch manager.authorizationStatus {
             case .authorizedAlways, .authorizedWhenInUse:
                 manager.startUpdatingLocation()
-                if #available(iOS 14.0, *), CLLocationManager.headingAvailable() {
-                    manager.startUpdatingHeading()
-                }
             case .notDetermined:
                 manager.requestWhenInUseAuthorization()
             case .restricted, .denied:

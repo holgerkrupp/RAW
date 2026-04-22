@@ -6,26 +6,19 @@ struct ContentView: View {
     var body: some View {
         NavigationSplitView {
             List(SensorStore.SensorSection.allCases, selection: $sensorStore.selectedSection) { section in
-                NavigationLink(value: section) {
-                    Label(section.rawValue, systemImage: icon(for: section))
-                        .padding(.vertical, 4)
-                }
+                Label(section.rawValue, systemImage: icon(for: section))
+                    .padding(.vertical, 4)
             }
             .navigationTitle("Liquid Glass Sensors")
             .scrollContentBackground(.hidden)
             .background(.ultraThinMaterial)
         } detail: {
-            Group {
-                if let section = sensorStore.selectedSection {
-                    SensorDetailView(title: section.rawValue, values: sensorStore.values(for: section))
-                } else {
-                    ContentUnavailableView("Select a sensor section", systemImage: "sensor.tag.radiowaves.forward")
-                }
+            if let section = sensorStore.selectedSection {
+                SensorDetailView(title: section.rawValue, values: sensorStore.values(for: section))
+            } else {
+                ContentUnavailableView("Select a sensor section", systemImage: "sensor.tag.radiowaves.forward")
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .navigationSplitViewStyle(.balanced)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private func icon(for section: SensorStore.SensorSection) -> String {
